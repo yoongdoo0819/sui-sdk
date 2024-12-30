@@ -8,11 +8,16 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/BurntSushi/toml"
 	"github.com/block-vision/sui-go-sdk/models"
 	"github.com/block-vision/sui-go-sdk/signer"
 	"github.com/block-vision/sui-go-sdk/sui"
 	"github.com/block-vision/sui-go-sdk/utils"
 )
+
+type Config struct {
+	MNEMONIC string `toml:"mnemonic"`
+}
 
 type RunInferenceReq struct {
 	// Arguments []interface{} `json:"arguments"`
@@ -32,81 +37,86 @@ type Response struct {
 	Message string `json:"message"`
 }
 
-func runInference(w http.ResponseWriter, r *http.Request) {
-	// POST 요청만 허용
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func runInference(mnemonic string) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		// POST 요청만 허용
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// 요청 바디 파싱
+		var reqBody RunInferenceReq
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, "Invalid JSON request body", http.StatusBadRequest)
+			return
+		}
+
+		// Sui 클라이언트 초기화
+		ctx := context.Background()
+		cli := sui.NewSuiClient("https://sui-devnet-endpoint.blockvision.org")
+
+		// 서명자 생성
+		signerAccount, err := signer.NewSignertWithMnemonic(mnemonic)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create signer: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+
+		priKey := signerAccount.PriKey
+		gasObj := "0xfa6e9bf9f256f322330c56b8ad2b128c051f95d21e78482a64e8fd72eeea6bc2"
+
+		req := []interface{}{}
+		req = append(req, reqBody.In1)
+		req = append(req, reqBody.In2)
+		req = append(req, reqBody.In3)
+
+		// MoveCall 실행
+		rsp, err := cli.MoveCall(ctx, models.MoveCallRequest{
+			Signer:          signerAccount.Address,
+			PackageObjectId: "0x1a17fdd92c9d989f5200900302df4901d66fd04062a34eccbb83f085230838d7",
+			Module:          "Inference",
+			Function:        "run",
+			TypeArguments:   []interface{}{},
+			Arguments:       req,
+			Gas:             &gasObj,
+			GasBudget:       "2000000000",
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("MoveCall error: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+
+		// 트랜잭션 서명 및 실행
+		rsp2, err := cli.SignAndExecuteTransactionBlock(ctx, models.SignAndExecuteTransactionBlockRequest{
+			TxnMetaData: rsp,
+			PriKey:      priKey,
+			Options: models.SuiTransactionBlockOptions{
+				ShowInput:    true,
+				ShowRawInput: true,
+				ShowEffects:  true,
+			},
+			RequestType: "WaitForLocalExecution",
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Transaction execution error: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+
+		utils.PrettyPrint(rsp2)
+
+		// JSON 응답 반환
+		response := ResponseBody{
+			Message: "Transaction executed successfully",
+			Data:    rsp2,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
 	}
-
-	// 요청 바디 파싱
-	var reqBody RunInferenceReq
-	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid JSON request body", http.StatusBadRequest)
-		return
-	}
-
-	// Sui 클라이언트 초기화
-	ctx := context.Background()
-	cli := sui.NewSuiClient("https://sui-devnet-endpoint.blockvision.org")
-
-	// 서명자 생성
-	signerAccount, err := signer.NewSignertWithMnemonic("tourist comic tongue boost soap couch repair random illness road travel jeans palm lady punch divide lucky sign room vital business gap coconut pizza")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create signer: %s", err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	priKey := signerAccount.PriKey
-	gasObj := "0xfa6e9bf9f256f322330c56b8ad2b128c051f95d21e78482a64e8fd72eeea6bc2"
-
-	req := []interface{}{}
-	req = append(req, reqBody.In1)
-	req = append(req, reqBody.In2)
-	req = append(req, reqBody.In3)
-
-	// MoveCall 실행
-	rsp, err := cli.MoveCall(ctx, models.MoveCallRequest{
-		Signer:          signerAccount.Address,
-		PackageObjectId: "0x1a17fdd92c9d989f5200900302df4901d66fd04062a34eccbb83f085230838d7",
-		Module:          "Inference",
-		Function:        "run",
-		TypeArguments:   []interface{}{},
-		Arguments:       req,
-		Gas:             &gasObj,
-		GasBudget:       "2000000000",
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("MoveCall error: %s", err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	// 트랜잭션 서명 및 실행
-	rsp2, err := cli.SignAndExecuteTransactionBlock(ctx, models.SignAndExecuteTransactionBlockRequest{
-		TxnMetaData: rsp,
-		PriKey:      priKey,
-		Options: models.SuiTransactionBlockOptions{
-			ShowInput:    true,
-			ShowRawInput: true,
-			ShowEffects:  true,
-		},
-		RequestType: "WaitForLocalExecution",
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Transaction execution error: %s", err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	utils.PrettyPrint(rsp2)
-
-	// JSON 응답 반환
-	response := ResponseBody{
-		Message: "Transaction executed successfully",
-		Data:    rsp2,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 // Hello 핸들러 (GET 요청 처리)
@@ -123,9 +133,14 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+	var config Config
+	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+		log.Fatalf("Error reading config file: %v", err)
+	}
+
 	// /run 엔드포인트 등록
 	http.HandleFunc("/hello", helloHandler)
-	http.HandleFunc("/run", runInference)
+	http.HandleFunc("/run", runInference(config.MNEMONIC))
 
 	// 서버 시작
 	port := "8080"

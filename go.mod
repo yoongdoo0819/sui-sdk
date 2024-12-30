@@ -2,7 +2,10 @@ module github.com/sui-sdk
 
 go 1.23.2
 
-require github.com/block-vision/sui-go-sdk v1.0.6
+require (
+	github.com/BurntSushi/toml v1.4.0
+	github.com/block-vision/sui-go-sdk v1.0.6
+)
 
 require (
 	github.com/go-playground/locales v0.14.1 // indirect
